@@ -16,6 +16,10 @@ export type MemoryConfig = {
     apiKey?: string;
     model: string;
   };
+  extraction: {
+    model: string;
+    maxTokens: number;
+  };
   collectionName: string;
   autoCapture: boolean;
   autoRecall: boolean;
@@ -38,6 +42,8 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_WEAVIATE_URL = "http://localhost:8080";
 const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
+const DEFAULT_EXTRACTION_MODEL = "gpt-4o-mini";
+const DEFAULT_EXTRACTION_MAX_TOKENS = 1024;
 const DEFAULT_COLLECTION = "ClawdbotMemory";
 
 // ============================================================================
@@ -93,7 +99,7 @@ export const memoryConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["weaviate", "embedding", "collectionName", "autoCapture", "autoRecall"],
+      ["weaviate", "embedding", "extraction", "collectionName", "autoCapture", "autoRecall"],
       "memory-weaviate config",
     );
 
@@ -124,6 +130,19 @@ export const memoryConfigSchema = {
       vectorDimsForModel(model); // validate
     }
 
+    // Extraction config (LLM-based memory extraction)
+    const extraction = (cfg.extraction as Record<string, unknown>) ?? {};
+    assertAllowedKeys(extraction, ["model", "maxTokens"], "extraction config");
+
+    const extractionModel =
+      typeof extraction.model === "string"
+        ? extraction.model
+        : DEFAULT_EXTRACTION_MODEL;
+    const extractionMaxTokens =
+      typeof extraction.maxTokens === "number"
+        ? extraction.maxTokens
+        : DEFAULT_EXTRACTION_MAX_TOKENS;
+
     return {
       weaviate: {
         url: resolveEnvVars(weaviate.url),
@@ -139,6 +158,10 @@ export const memoryConfigSchema = {
             ? resolveEnvVars(embedding.apiKey)
             : undefined,
         model,
+      },
+      extraction: {
+        model: extractionModel,
+        maxTokens: extractionMaxTokens,
       },
       collectionName:
         typeof cfg.collectionName === "string"

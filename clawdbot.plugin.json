@@ -28,6 +28,17 @@
       "placeholder": "text-embedding-3-small",
       "help": "OpenAI embedding model to use (ignored if provider is 'weaviate')"
     },
+    "extraction.model": {
+      "label": "Extraction Model",
+      "placeholder": "gpt-4o-mini",
+      "help": "LLM model used to extract memories from conversations (cheap/fast recommended)"
+    },
+    "extraction.maxTokens": {
+      "label": "Extraction Max Tokens",
+      "placeholder": "1024",
+      "advanced": true,
+      "help": "Max tokens for extraction LLM response"
+    },
     "collectionName": {
       "label": "Collection Name",
       "placeholder": "ClawdbotMemory",
@@ -65,6 +76,14 @@
             "type": "string",
             "enum": ["text-embedding-3-small", "text-embedding-3-large"]
           }
+        }
+      },
+      "extraction": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": { "type": "string" },
+          "maxTokens": { "type": "number" }
         }
       },
       "collectionName": { "type": "string" },

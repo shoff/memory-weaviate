@@ -336,40 +336,110 @@ class Embeddings {
 }
 
 // ============================================================================
-// Auto-capture triggers
+// LLM-based Memory Extraction
 // ============================================================================
 
-const MEMORY_TRIGGERS = [
-  /remember|don't forget|keep in mind/i,
-  /i prefer|i like|i hate|i love|i want|i need/i,
-  /we decided|we agreed|going with|we'll use/i,
-  /my name is|i'm called|call me/i,
-  /my .+ is|i work at|i live in/i,
-  /always|never|important to me/i,
-  /\+\d{10,}/, // phone numbers
-  /[\w.-]+@[\w.-]+\.\w+/, // emails
-];
+type ExtractedMemory = {
+  text: string;
+  category: MemoryCategory;
+  importance: number;
+};
 
-function shouldCapture(text: string): boolean {
-  if (text.length < 10 || text.length > 1000) return false;
-  if (text.includes("<relevant-memories>")) return false;
-  if (text.startsWith("<") && text.includes("</")) return false;
-  if (text.includes("**") && text.includes("\n-")) return false;
-  const emojiCount = (text.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
-  if (emojiCount > 3) return false;
-  return MEMORY_TRIGGERS.some((r) => r.test(text));
+const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction agent for a personal AI assistant. Your job is to identify information worth remembering long-term from conversation turns.
+
+Extract ONLY facts that would be useful in future conversations. Focus on:
+- User preferences, likes, dislikes, opinions
+- Decisions made (tech choices, project directions, agreements)
+- Personal facts (names, relationships, locations, jobs, contacts)
+- Project/work context (stack choices, architecture decisions, team info)
+- Important dates, deadlines, commitments
+- Behavioral patterns or communication preferences
+
+DO NOT extract:
+- Transient chit-chat or greetings
+- Information the assistant already knows from its system prompt
+- Vague or context-dependent statements that won't make sense later
+- The assistant's own responses (only extract user-provided info)
+- Anything that looks like injected system context or memory recall results
+
+Respond with a JSON array of extracted memories. Each entry:
+{
+  "text": "Concise, self-contained statement of the fact (should make sense without surrounding context)",
+  "category": "preference" | "fact" | "decision" | "entity" | "conversation" | "other",
+  "importance": 0.0-1.0 (how important is this to remember?)
 }
 
-function detectCategory(text: string): MemoryCategory {
-  const lower = text.toLowerCase();
-  if (/prefer|like|love|hate|want|favorite/i.test(lower)) return "preference";
-  if (/decided|agreed|will use|going with/i.test(lower)) return "decision";
-  if (
-    /\+\d{10,}|@[\w.-]+\.\w+|name is|called|works at|lives in/i.test(lower)
-  )
-    return "entity";
-  if (/is|are|has|have/i.test(lower)) return "fact";
-  return "other";
+If nothing is worth remembering, respond with an empty array: []
+
+Be selective. Quality over quantity. 2-3 high-quality extractions beats 10 noisy ones.`;
+
+class MemoryExtractor {
+  private client: OpenAI;
+
+  constructor(
+    apiKey: string,
+    private model: string,
+    private maxTokens: number,
+  ) {
+    this.client = new OpenAI({ apiKey });
+  }
+
+  async extract(conversationText: string): Promise<ExtractedMemory[]> {
+    // Skip obviously empty or system-generated content
+    if (!conversationText || conversationText.length < 20) return [];
+    if (conversationText.includes("<relevant-memories>")) return [];
+
+    try {
+      const response = await this.client.chat.completions.create({
+        model: this.model,
+        max_tokens: this.maxTokens,
+        temperature: 0.1, // Low temp for consistent extraction
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Extract memories from this conversation turn:\n\n${conversationText}`,
+          },
+        ],
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) return [];
+
+      const parsed = JSON.parse(content);
+
+      // Handle both {memories: [...]} and [...] formats
+      const items: unknown[] = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed.memories)
+          ? parsed.memories
+          : [];
+
+      // Validate and filter
+      return items
+        .filter((item): item is Record<string, unknown> => {
+          if (!item || typeof item !== "object") return false;
+          const obj = item as Record<string, unknown>;
+          return (
+            typeof obj.text === "string" &&
+            obj.text.length >= 5 &&
+            typeof obj.category === "string" &&
+            MEMORY_CATEGORIES.includes(obj.category as MemoryCategory)
+          );
+        })
+        .map((item) => ({
+          text: (item.text as string).slice(0, 500), // Cap length
+          category: item.category as MemoryCategory,
+          importance: typeof item.importance === "number"
+            ? Math.max(0, Math.min(1, item.importance))
+            : 0.7,
+        }));
+    } catch (err) {
+      // Extraction failure is non-fatal - just skip this turn
+      return [];
+    }
+  }
 }
 
 // ============================================================================
@@ -394,8 +464,18 @@ const memoryPlugin = {
         ? new Embeddings(cfg.embedding.apiKey, cfg.embedding.model)
         : null;
 
+    // LLM-based memory extractor (uses OpenAI API key from embedding config)
+    const extractor =
+      cfg.autoCapture && cfg.embedding.apiKey
+        ? new MemoryExtractor(
+            cfg.embedding.apiKey,
+            cfg.extraction.model,
+            cfg.extraction.maxTokens,
+          )
+        : null;
+
     api.logger.info(
-      `memory-weaviate: registered (url: ${cfg.weaviate.url}, collection: ${cfg.collectionName}, embedding: ${cfg.embedding.provider}, lazy init)`,
+      `memory-weaviate: registered (url: ${cfg.weaviate.url}, collection: ${cfg.collectionName}, embedding: ${cfg.embedding.provider}, extraction: ${extractor ? cfg.extraction.model : "disabled"}, lazy init)`,
     );
 
     // Helper: get vector for text (only needed for OpenAI provider)
@@ -791,14 +871,15 @@ const memoryPlugin = {
     // Lifecycle Hooks - Auto-Capture
     // ========================================================================
 
-    if (cfg.autoCapture) {
+    if (cfg.autoCapture && extractor) {
       api.on("agent_end", async (event) => {
         if (!event.success || !event.messages || event.messages.length === 0) {
           return;
         }
 
         try {
-          const texts: string[] = [];
+          // Build conversation text from the turn's messages
+          const parts: string[] = [];
           for (const msg of event.messages) {
             if (!msg || typeof msg !== "object") continue;
             const msgObj = msg as Record<string, unknown>;
@@ -807,7 +888,7 @@ const memoryPlugin = {
 
             const content = msgObj.content;
             if (typeof content === "string") {
-              texts.push(content);
+              parts.push(`[${role}]: ${content}`);
               continue;
             }
             if (Array.isArray(content)) {
@@ -820,33 +901,38 @@ const memoryPlugin = {
                   "text" in block &&
                   typeof (block as Record<string, unknown>).text === "string"
                 ) {
-                  texts.push(
-                    (block as Record<string, unknown>).text as string,
+                  parts.push(
+                    `[${role}]: ${(block as Record<string, unknown>).text as string}`,
                   );
                 }
               }
             }
           }
 
-          const toCapture = texts.filter((t) => t && shouldCapture(t));
-          if (toCapture.length === 0) return;
+          if (parts.length === 0) return;
+
+          // Truncate to avoid blowing up the extraction call
+          const conversationText = parts.join("\n\n").slice(0, 4000);
+
+          // LLM extracts what's worth remembering
+          const extracted = await extractor.extract(conversationText);
+          if (extracted.length === 0) return;
 
           let stored = 0;
-          for (const text of toCapture.slice(0, 5)) {
-            const category = detectCategory(text);
-            const vector = await getVector(text);
+          for (const memory of extracted.slice(0, 5)) {
+            const vector = await getVector(memory.text);
 
-            // Deduplicate
+            // Deduplicate against existing memories
             const existing = vector
-              ? await store.search(text, vector, 1, 0.95)
-              : await store.hybridSearch(text, 1, 0.95);
+              ? await store.search(memory.text, vector, 1, 0.92)
+              : await store.hybridSearch(memory.text, 1, 0.92);
             if (existing.length > 0) continue;
 
             await store.store(
               {
-                text,
-                importance: 0.7,
-                category,
+                text: memory.text,
+                importance: memory.importance,
+                category: memory.category,
                 source: "auto-capture",
               },
               vector,
@@ -856,7 +942,7 @@ const memoryPlugin = {
 
           if (stored > 0) {
             api.logger.info(
-              `memory-weaviate: auto-captured ${stored} memories`,
+              `memory-weaviate: auto-captured ${stored} memories (via ${cfg.extraction.model})`,
             );
           }
         } catch (err) {

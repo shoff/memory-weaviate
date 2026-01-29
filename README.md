@@ -9,6 +9,7 @@ Weaviate-backed long-term vector memory plugin for Clawdbot.
 - **Auto-capture** - mines conversations for important info and stores it
 - **Deduplication** - won't store near-identical memories
 - **GDPR-friendly** - delete any memory by ID or search
+- **LLM-powered extraction** - uses a fast model (gpt-4o-mini) to intelligently decide what's worth remembering, with proper categorization and importance scoring
 - **Two embedding modes:**
   - `openai` - you provide embeddings via OpenAI API (recommended)
   - `weaviate` - use Weaviate's built-in text2vec-openai module
@@ -53,6 +54,10 @@ Add to your `clawdbot.json`:
             "provider": "openai",
             "apiKey": "${OPENAI_API_KEY}",
             "model": "text-embedding-3-small"
+          },
+          "extraction": {
+            "model": "gpt-4o-mini",
+            "maxTokens": 1024
           },
           "autoCapture": true,
           "autoRecall": true
@@ -102,13 +107,27 @@ Agent ──> memory_recall ──> WeaviateMemoryStore ──> Weaviate (Docker
       ──> memory_store  ──>                     ──>
       
 Lifecycle:
-  before_agent_start ──> auto-recall (inject context)
-  agent_end          ──> auto-capture (mine & store)
+  before_agent_start ──> auto-recall (inject relevant memories)
+  agent_end          ──> LLM extraction ──> deduplicate ──> store
 ```
+
+## Auto-Capture: LLM Extraction
+
+Instead of brittle regex pattern matching, auto-capture sends each conversation turn through a lightweight LLM (default: `gpt-4o-mini`) that intelligently decides what's worth remembering.
+
+The extraction model:
+- Understands context and intent ("I prefer tabs" vs "I'd prefer we move on")
+- Condenses information into clean, self-contained memory statements
+- Assigns accurate categories and importance scores
+- Filters out noise, greetings, and transient chatter
+
+Cost: ~500-1000 tokens per turn at gpt-4o-mini pricing. Pennies per conversation.
+
+Configure the extraction model via `extraction.model` (any OpenAI-compatible model works).
 
 ## Categories
 
-Memories are categorized automatically during auto-capture:
+Memories are categorized by the extraction LLM:
 - `preference` - User likes, dislikes, wants
 - `decision` - Agreed-upon choices
 - `entity` - People, places, contacts
