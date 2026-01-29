@@ -1,0 +1,16 @@
+{
+  "name": "@clawdbot/memory-weaviate",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Clawdbot Weaviate-backed long-term memory plugin with hybrid search, auto-recall, and auto-capture",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.47",
+    "openai": "^6.16.0",
+    "weaviate-client": "^3.3.6"
+  },
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

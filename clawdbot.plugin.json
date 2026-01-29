@@ -1,0 +1,76 @@
+{
+  "id": "memory-weaviate",
+  "kind": "memory",
+  "uiHints": {
+    "weaviate.url": {
+      "label": "Weaviate URL",
+      "placeholder": "http://localhost:8080",
+      "help": "URL of your Weaviate instance"
+    },
+    "weaviate.apiKey": {
+      "label": "Weaviate API Key",
+      "sensitive": true,
+      "placeholder": "(optional for local instances)",
+      "help": "API key for Weaviate Cloud or authenticated instances"
+    },
+    "embedding.provider": {
+      "label": "Embedding Provider",
+      "help": "Use 'openai' for OpenAI API embeddings or 'weaviate' to use Weaviate's built-in vectorizer"
+    },
+    "embedding.apiKey": {
+      "label": "OpenAI API Key",
+      "sensitive": true,
+      "placeholder": "sk-proj-...",
+      "help": "API key for OpenAI embeddings (required if provider is 'openai')"
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "text-embedding-3-small",
+      "help": "OpenAI embedding model to use (ignored if provider is 'weaviate')"
+    },
+    "collectionName": {
+      "label": "Collection Name",
+      "placeholder": "ClawdbotMemory",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically capture important information from conversations"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories into context"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "weaviate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": { "type": "string" },
+          "apiKey": { "type": "string" }
+        },
+        "required": ["url"]
+      },
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "type": "string", "enum": ["openai", "weaviate"] },
+          "apiKey": { "type": "string" },
+          "model": {
+            "type": "string",
+            "enum": ["text-embedding-3-small", "text-embedding-3-large"]
+          }
+        }
+      },
+      "collectionName": { "type": "string" },
+      "autoCapture": { "type": "boolean" },
+      "autoRecall": { "type": "boolean" }
+    },
+    "required": ["weaviate"]
+  }
+}
