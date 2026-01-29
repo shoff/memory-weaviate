@@ -20,6 +20,7 @@ import {
   MEMORY_CATEGORIES,
   type MemoryCategory,
   type MemoryConfig,
+  type ExtractionConfig,
   memoryConfigSchema,
   vectorDimsForModel,
 } from "./config.js";
@@ -121,19 +122,16 @@ class WeaviateMemoryStore {
       ],
     };
 
-    // If using Weaviate's built-in vectorizer, configure it
-    // Otherwise we'll provide vectors manually (OpenAI provider)
+    // Configure vectorizer based on embedding provider
     if (this.config.embedding.provider === "weaviate") {
-      // Uses whatever vectorizer module is configured in Weaviate
-      // (e.g., text2vec-openai, text2vec-transformers)
+      // Use Weaviate's built-in text2vec-transformers (local, free, no API key)
       collectionConfig.vectorizers = [
-        weaviate.configure.vectorizer.text2VecOpenAI({
-          model: this.config.embedding.model,
+        weaviate.configure.vectorizer.text2VecTransformers({
           sourceProperties: ["text"],
         }),
       ];
     } else {
-      // No vectorizer - we provide vectors ourselves
+      // No vectorizer - we provide vectors ourselves (OpenAI provider)
       collectionConfig.vectorizers = [
         weaviate.configure.vectorizer.none({
           vectorIndexConfig: weaviate.configure.vectorIndex.hnsw(),
@@ -376,12 +374,13 @@ Be selective. Quality over quantity. 2-3 high-quality extractions beats 10 noisy
 class MemoryExtractor {
   private client: OpenAI;
 
-  constructor(
-    apiKey: string,
-    private model: string,
-    private maxTokens: number,
-  ) {
-    this.client = new OpenAI({ apiKey });
+  constructor(private extractionConfig: ExtractionConfig) {
+    this.client = new OpenAI({
+      apiKey: extractionConfig.apiKey ?? "not-needed", // Local providers don't need a key
+      ...(extractionConfig.baseUrl
+        ? { baseURL: extractionConfig.baseUrl }
+        : {}),
+    });
   }
 
   async extract(conversationText: string): Promise<ExtractedMemory[]> {
@@ -390,24 +389,33 @@ class MemoryExtractor {
     if (conversationText.includes("<relevant-memories>")) return [];
 
     try {
+      // Some local models don't support response_format, so we only use it
+      // when talking to OpenAI (no custom baseUrl)
+      const useJsonMode = !this.extractionConfig.baseUrl;
+
       const response = await this.client.chat.completions.create({
-        model: this.model,
-        max_tokens: this.maxTokens,
+        model: this.extractionConfig.model,
+        max_tokens: this.extractionConfig.maxTokens,
         temperature: 0.1, // Low temp for consistent extraction
-        response_format: { type: "json_object" },
+        ...(useJsonMode ? { response_format: { type: "json_object" } } : {}),
         messages: [
           { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
           {
             role: "user",
-            content: `Extract memories from this conversation turn:\n\n${conversationText}`,
+            content: `Extract memories from this conversation turn. Respond ONLY with a JSON array (or {"memories": [...]}). No other text.\n\n${conversationText}`,
           },
         ],
       });
 
-      const content = response.choices[0]?.message?.content;
+      const content = response.choices[0]?.message?.content?.trim();
       if (!content) return [];
 
-      const parsed = JSON.parse(content);
+      // Extract JSON from response (local models sometimes wrap in markdown code blocks)
+      const jsonStr = content.startsWith("[") || content.startsWith("{")
+        ? content
+        : (content.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1]?.trim() ?? content);
+
+      const parsed = JSON.parse(jsonStr);
 
       // Handle both {memories: [...]} and [...] formats
       const items: unknown[] = Array.isArray(parsed)
@@ -464,14 +472,12 @@ const memoryPlugin = {
         ? new Embeddings(cfg.embedding.apiKey, cfg.embedding.model)
         : null;
 
-    // LLM-based memory extractor (uses OpenAI API key from embedding config)
+    // LLM-based memory extractor
+    // Works with: OpenAI API, Ollama (http://localhost:11434/v1), LM Studio (http://localhost:1234/v1),
+    // or any OpenAI-compatible endpoint
     const extractor =
-      cfg.autoCapture && cfg.embedding.apiKey
-        ? new MemoryExtractor(
-            cfg.embedding.apiKey,
-            cfg.extraction.model,
-            cfg.extraction.maxTokens,
-          )
+      cfg.autoCapture && (cfg.extraction.apiKey || cfg.extraction.baseUrl)
+        ? new MemoryExtractor(cfg.extraction)
         : null;
 
     api.logger.info(

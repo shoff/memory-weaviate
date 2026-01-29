@@ -11,9 +11,20 @@ services:
       QUERY_DEFAULTS_LIMIT: 25
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
       PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
-      DEFAULT_VECTORIZER_MODULE: "none"
-      ENABLE_MODULES: "text2vec-openai,generative-openai"
+      DEFAULT_VECTORIZER_MODULE: "text2vec-transformers"
+      ENABLE_MODULES: "text2vec-transformers,text2vec-openai,generative-openai"
+      TRANSFORMERS_INFERENCE_API: "http://text2vec-transformers:8080"
       CLUSTER_HOSTNAME: "node1"
+    depends_on:
+      - text2vec-transformers
+
+  # Local sentence transformer for embeddings (no API key needed)
+  # Uses all-MiniLM-L6-v2: fast, 384-dim, great for semantic search
+  text2vec-transformers:
+    image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-all-MiniLM-L6-v2
+    restart: unless-stopped
+    environment:
+      ENABLE_CUDA: "0"  # Set to 1 if you have a GPU
 
 volumes:
   weaviate_data:

@@ -1,10 +1,19 @@
-import { homedir } from "node:os";
-
 // ============================================================================
 // Types
 // ============================================================================
 
 export type EmbeddingProvider = "openai" | "weaviate";
+
+export type ExtractionConfig = {
+  /** OpenAI-compatible base URL (e.g. http://localhost:11434/v1 for Ollama, http://localhost:1234/v1 for LM Studio) */
+  baseUrl?: string;
+  /** API key - required for OpenAI, optional/ignored for local providers */
+  apiKey?: string;
+  /** Model name (e.g. "gpt-4o-mini", "llama3.2", "qwen2.5-coder") */
+  model: string;
+  /** Max tokens for extraction response */
+  maxTokens: number;
+};
 
 export type MemoryConfig = {
   weaviate: {
@@ -16,10 +25,7 @@ export type MemoryConfig = {
     apiKey?: string;
     model: string;
   };
-  extraction: {
-    model: string;
-    maxTokens: number;
-  };
+  extraction: ExtractionConfig;
   collectionName: string;
   autoCapture: boolean;
   autoRecall: boolean;
@@ -47,7 +53,7 @@ const DEFAULT_EXTRACTION_MAX_TOKENS = 1024;
 const DEFAULT_COLLECTION = "ClawdbotMemory";
 
 // ============================================================================
-// Dimensions lookup (for OpenAI provider)
+// Dimensions lookup (for OpenAI provider only)
 // ============================================================================
 
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
@@ -74,6 +80,12 @@ function resolveEnvVars(value: string): string {
       throw new Error(`Environment variable ${envVar} is not set`);
     }
     return envValue;
+  });
+}
+
+function resolveOptionalEnvVars(value: string): string {
+  return value.replace(/\$\{([^}]+)\}/g, (match, envVar) => {
+    return process.env[envVar] ?? match;
   });
 }
 
@@ -132,16 +144,35 @@ export const memoryConfigSchema = {
 
     // Extraction config (LLM-based memory extraction)
     const extraction = (cfg.extraction as Record<string, unknown>) ?? {};
-    assertAllowedKeys(extraction, ["model", "maxTokens"], "extraction config");
+    assertAllowedKeys(extraction, ["baseUrl", "apiKey", "model", "maxTokens"], "extraction config");
+
+    const extractionBaseUrl =
+      typeof extraction.baseUrl === "string"
+        ? resolveOptionalEnvVars(extraction.baseUrl)
+        : undefined;
+
+    const extractionApiKey =
+      typeof extraction.apiKey === "string"
+        ? resolveEnvVars(extraction.apiKey)
+        : undefined;
 
     const extractionModel =
       typeof extraction.model === "string"
         ? extraction.model
         : DEFAULT_EXTRACTION_MODEL;
+
     const extractionMaxTokens =
       typeof extraction.maxTokens === "number"
         ? extraction.maxTokens
         : DEFAULT_EXTRACTION_MAX_TOKENS;
+
+    // If no explicit extraction API key and no baseUrl, fall back to embedding API key
+    // (backwards compat: OpenAI key used for both embedding + extraction)
+    const resolvedExtractionApiKey =
+      extractionApiKey ??
+      (typeof embedding.apiKey === "string" && !extractionBaseUrl
+        ? resolveEnvVars(embedding.apiKey)
+        : undefined);
 
     return {
       weaviate: {
@@ -160,6 +191,8 @@ export const memoryConfigSchema = {
         model,
       },
       extraction: {
+        baseUrl: extractionBaseUrl,
+        apiKey: resolvedExtractionApiKey,
         model: extractionModel,
         maxTokens: extractionMaxTokens,
       },

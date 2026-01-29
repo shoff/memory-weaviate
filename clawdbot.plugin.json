@@ -28,10 +28,21 @@
       "placeholder": "text-embedding-3-small",
       "help": "OpenAI embedding model to use (ignored if provider is 'weaviate')"
     },
+    "extraction.baseUrl": {
+      "label": "Extraction LLM Base URL",
+      "placeholder": "http://localhost:11434/v1",
+      "help": "OpenAI-compatible API base URL. Use http://localhost:11434/v1 for Ollama, http://localhost:1234/v1 for LM Studio. Leave empty for OpenAI API."
+    },
+    "extraction.apiKey": {
+      "label": "Extraction API Key",
+      "sensitive": true,
+      "placeholder": "(optional for local providers)",
+      "help": "API key for the extraction LLM. Not needed for Ollama/LM Studio. Falls back to embedding.apiKey if unset."
+    },
     "extraction.model": {
       "label": "Extraction Model",
       "placeholder": "gpt-4o-mini",
-      "help": "LLM model used to extract memories from conversations (cheap/fast recommended)"
+      "help": "Model for memory extraction (e.g. gpt-4o-mini, llama3.2, qwen2.5-coder, gemma2)"
     },
     "extraction.maxTokens": {
       "label": "Extraction Max Tokens",
@@ -82,6 +93,8 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "baseUrl": { "type": "string" },
+          "apiKey": { "type": "string" },
           "model": { "type": "string" },
           "maxTokens": { "type": "number" }
         }

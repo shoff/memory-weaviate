@@ -23,6 +23,8 @@ cd extensions/memory-weaviate
 docker compose up -d
 ```
 
+This starts Weaviate with a local `text2vec-transformers` sidecar (sentence-transformers/all-MiniLM-L6-v2). No API keys needed for embeddings.
+
 ### 2. Install dependencies
 
 ```bash
@@ -32,7 +34,54 @@ npm install
 
 ### 3. Configure Clawdbot
 
-Add to your `clawdbot.json`:
+#### Fully Local (Weaviate embeddings + Ollama extraction)
+
+Zero API costs. All inference runs on your machine.
+
+```json
+{
+  "plugins": {
+    "slots": {
+      "memory": "memory-weaviate"
+    },
+    "load": {
+      "paths": ["./extensions/memory-weaviate"]
+    },
+    "entries": {
+      "memory-weaviate": {
+        "enabled": true,
+        "config": {
+          "weaviate": {
+            "url": "http://localhost:8080"
+          },
+          "embedding": {
+            "provider": "weaviate"
+          },
+          "extraction": {
+            "baseUrl": "http://localhost:11434/v1",
+            "model": "llama3.2"
+          },
+          "autoCapture": true,
+          "autoRecall": true
+        }
+      }
+    }
+  }
+}
+```
+
+#### Fully Local (Weaviate embeddings + LM Studio extraction)
+
+```json
+{
+  "extraction": {
+    "baseUrl": "http://localhost:1234/v1",
+    "model": "qwen2.5-coder-7b"
+  }
+}
+```
+
+#### Cloud (OpenAI embeddings + OpenAI extraction)
 
 ```json
 {
@@ -56,8 +105,7 @@ Add to your `clawdbot.json`:
             "model": "text-embedding-3-small"
           },
           "extraction": {
-            "model": "gpt-4o-mini",
-            "maxTokens": 1024
+            "model": "gpt-4o-mini"
           },
           "autoCapture": true,
           "autoRecall": true
@@ -67,6 +115,8 @@ Add to your `clawdbot.json`:
   }
 }
 ```
+
+When using OpenAI for both embedding and extraction, the extraction API key falls back to `embedding.apiKey` automatically.
 
 ### 4. Restart Clawdbot
 
@@ -113,7 +163,7 @@ Lifecycle:
 
 ## Auto-Capture: LLM Extraction
 
-Instead of brittle regex pattern matching, auto-capture sends each conversation turn through a lightweight LLM (default: `gpt-4o-mini`) that intelligently decides what's worth remembering.
+Instead of brittle regex pattern matching, auto-capture sends each conversation turn through an LLM that intelligently decides what's worth remembering.
 
 The extraction model:
 - Understands context and intent ("I prefer tabs" vs "I'd prefer we move on")
@@ -121,9 +171,16 @@ The extraction model:
 - Assigns accurate categories and importance scores
 - Filters out noise, greetings, and transient chatter
 
-Cost: ~500-1000 tokens per turn at gpt-4o-mini pricing. Pennies per conversation.
+### Extraction Providers
 
-Configure the extraction model via `extraction.model` (any OpenAI-compatible model works).
+| Provider | `baseUrl` | `apiKey` | Cost |
+|----------|-----------|----------|------|
+| **Ollama** | `http://localhost:11434/v1` | not needed | Free |
+| **LM Studio** | `http://localhost:1234/v1` | not needed | Free |
+| **OpenAI** | (omit) | required | ~$0.001/turn |
+| **Any OpenAI-compatible** | your endpoint | if needed | varies |
+
+Configure via `extraction.baseUrl` and `extraction.model`. Any model that can follow structured JSON output instructions will work.
 
 ## Categories
 
