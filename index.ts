@@ -127,6 +127,7 @@ class WeaviateMemoryStore {
       // Use Weaviate's built-in text2vec-transformers (local, free, no API key)
       collectionConfig.vectorizers = [
         weaviate.configure.vectorizer.text2VecTransformers({
+          name: "text_vector",
           sourceProperties: ["text"],
         }),
       ];
@@ -134,6 +135,7 @@ class WeaviateMemoryStore {
       // No vectorizer - we provide vectors ourselves (OpenAI provider)
       collectionConfig.vectorizers = [
         weaviate.configure.vectorizer.none({
+          name: "text_vector",
           vectorIndexConfig: weaviate.configure.vectorIndex.hnsw(),
         }),
       ];
@@ -164,7 +166,7 @@ class WeaviateMemoryStore {
       await this.collection!.data.insert({
         properties,
         id,
-        vectors: vector,
+        vectors: { text_vector: vector },
       });
     } else {
       await this.collection!.data.insert({
@@ -190,6 +192,7 @@ class WeaviateMemoryStore {
       // Vector search with provided embeddings
       results = await this.collection!.query.nearVector(vector, {
         limit,
+        targetVector: "text_vector",
         returnMetadata: ["distance"],
         returnProperties: [
           "text",
@@ -204,6 +207,7 @@ class WeaviateMemoryStore {
       // Use Weaviate's built-in vectorizer with nearText
       results = await this.collection!.query.nearText(queryText, {
         limit,
+        targetVector: "text_vector",
         returnMetadata: ["distance"],
         returnProperties: [
           "text",
@@ -252,6 +256,7 @@ class WeaviateMemoryStore {
     const results = await this.collection!.query.hybrid(queryText, {
       limit,
       alpha,
+      targetVector: "text_vector",
       returnMetadata: ["score"],
       returnProperties: [
         "text",
