@@ -250,6 +250,53 @@ class WeaviateMemoryStore {
       .filter((r: MemorySearchResult) => r.score >= minScore);
   }
 
+  /**
+   * Search using Weaviate's built-in vectorizer (nearText).
+   * Returns true cosine similarity scores (unlike hybrid which uses rank-fusion).
+   */
+  async nearTextSearch(
+    queryText: string,
+    limit = 5,
+    minScore = 0.5,
+  ): Promise<MemorySearchResult[]> {
+    await this.ensureInitialized();
+
+    const results = await this.collection!.query.nearText(queryText, {
+      limit,
+      targetVector: "text_vector",
+      returnMetadata: ["distance"],
+      returnProperties: [
+        "text",
+        "importance",
+        "category",
+        "source",
+        "sessionKey",
+        "createdAt",
+      ],
+    });
+
+    if (!results?.objects?.length) return [];
+
+    return results.objects
+      .map((obj: any) => {
+        const distance = obj.metadata?.distance ?? 1;
+        const score = 1 - distance / 2;
+        return {
+          entry: {
+            id: obj.uuid,
+            text: obj.properties.text,
+            importance: obj.properties.importance,
+            category: obj.properties.category as MemoryCategory,
+            source: obj.properties.source,
+            sessionKey: obj.properties.sessionKey,
+            createdAt: obj.properties.createdAt,
+          },
+          score,
+        };
+      })
+      .filter((r: MemorySearchResult) => r.score >= minScore);
+  }
+
   async hybridSearch(
     queryText: string,
     limit = 5,
@@ -607,11 +654,15 @@ const memoryPlugin = {
             category?: MemoryCategory;
           };
 
-          // Check for near-duplicates
+          // Check for near-duplicates using vector similarity.
+          // NOTE: Hybrid search can't be used for dedup because Weaviate's rank-fusion
+          // normalizes the top result to score 1.0 regardless of actual similarity.
+          // For the "weaviate" embedding provider (no external vectors), we use nearText
+          // which leverages the built-in vectorizer for a true cosine distance check.
           const vector = await getVector(text);
           const existing = vector
             ? await store.search(text, vector, 1, 0.95)
-            : await store.hybridSearch(text, 1, 0.95);
+            : await store.nearTextSearch(text, 1, 0.95);
 
           if (existing.length > 0) {
             return {
