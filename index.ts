@@ -66,10 +66,15 @@ class WeaviateMemoryStore {
 
   private async doInitialize(): Promise<void> {
     // Connect to Weaviate
+    const parsedUrl = new URL(this.config.weaviate.url);
+    const restPort = parseInt(parsedUrl.port || "8080");
+    // Default gRPC port: if REST is on 8080, use 50051. Otherwise offset by 1 from REST.
+    const defaultGrpcPort = restPort === 8080 ? 50051 : restPort + 1;
+
     const connectOpts: Parameters<typeof weaviate.connectToLocal>[0] = {
-      host: new URL(this.config.weaviate.url).hostname,
-      port: parseInt(new URL(this.config.weaviate.url).port || "8080"),
-      grpcPort: 50051,
+      host: parsedUrl.hostname,
+      port: restPort,
+      grpcPort: this.config.weaviate.grpcPort ?? defaultGrpcPort,
     };
 
     if (this.config.weaviate.apiKey) {

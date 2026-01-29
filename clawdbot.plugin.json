@@ -7,6 +7,12 @@
       "placeholder": "http://localhost:8080",
       "help": "URL of your Weaviate instance"
     },
+    "weaviate.grpcPort": {
+      "label": "Weaviate gRPC Port",
+      "placeholder": "50051",
+      "advanced": true,
+      "help": "gRPC port for Weaviate. Defaults to 50051 if REST is on 8080, otherwise REST port + 1."
+    },
     "weaviate.apiKey": {
       "label": "Weaviate API Key",
       "sensitive": true,
@@ -73,7 +79,8 @@
         "additionalProperties": false,
         "properties": {
           "url": { "type": "string" },
-          "apiKey": { "type": "string" }
+          "apiKey": { "type": "string" },
+          "grpcPort": { "type": "number" }
         },
         "required": ["url"]
       },

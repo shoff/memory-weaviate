@@ -19,6 +19,7 @@ export type MemoryConfig = {
   weaviate: {
     url: string;
     apiKey?: string;
+    grpcPort?: number;
   };
   embedding: {
     provider: EmbeddingProvider;
@@ -120,7 +121,7 @@ export const memoryConfigSchema = {
     if (!weaviate || typeof weaviate.url !== "string") {
       throw new Error("weaviate.url is required");
     }
-    assertAllowedKeys(weaviate, ["url", "apiKey"], "weaviate config");
+    assertAllowedKeys(weaviate, ["url", "apiKey", "grpcPort"], "weaviate config");
 
     // Embedding config
     const embedding = (cfg.embedding as Record<string, unknown>) ?? {};
@@ -180,6 +181,10 @@ export const memoryConfigSchema = {
         apiKey:
           typeof weaviate.apiKey === "string"
             ? resolveEnvVars(weaviate.apiKey)
+            : undefined,
+        grpcPort:
+          typeof weaviate.grpcPort === "number"
+            ? weaviate.grpcPort
             : undefined,
       },
       embedding: {
