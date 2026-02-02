@@ -1,6 +1,6 @@
 # memory-weaviate
 
-Weaviate-backed long-term vector memory plugin for Clawdbot.
+Weaviate-backed long-term vector memory plugin for **OpenClaw** (and Clawdbot).
 
 ## Features
 
@@ -13,6 +13,93 @@ Weaviate-backed long-term vector memory plugin for Clawdbot.
 - **Two embedding modes:**
   - `openai` - you provide embeddings via OpenAI API (recommended)
   - `weaviate` - use Weaviate's built-in text2vec-openai module
+
+## OpenClaw Setup (recommended)
+
+### 0) Requirements
+
+- A reachable Weaviate instance (local Docker is fine)
+- **If you use this repo’s docker-compose.yml**, you need Docker running on the host.
+
+### 1) Install / load the plugin
+
+This repo includes `openclaw.plugin.json`, so OpenClaw can load it as a plugin.
+
+Development / local path approach:
+
+```bash
+git clone https://github.com/shoff/memory-weaviate
+cd memory-weaviate
+npm install
+```
+
+Then point OpenClaw at the plugin directory (one-time config) and select it as your memory plugin.
+
+Example `~/.openclaw/openclaw.json` config:
+
+```jsonc
+{
+  "plugins": {
+    "enabled": true,
+    "slots": {
+      "memory": "memory-weaviate"
+    },
+    "load": {
+      "paths": ["/absolute/path/to/memory-weaviate"]
+    },
+    "entries": {
+      "memory-weaviate": {
+        "enabled": true,
+        "config": {
+          "weaviate": {
+            "url": "http://localhost:8081",
+            "grpcPort": 50052
+          },
+          "embedding": {
+            "provider": "weaviate"
+          },
+          "autoRecall": true,
+          "autoCapture": true,
+          "extraction": {
+            "baseUrl": "http://localhost:11434/v1",
+            "model": "llama3.2"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Notes:
+- `embedding.provider="weaviate"` means **Weaviate generates embeddings** (no OpenAI embeddings key needed).
+- If you set `extraction.baseUrl`, the extraction model can be **Ollama/LM Studio** (or any OpenAI-compatible endpoint).
+- If you omit `extraction.baseUrl`, extraction uses OpenAI API and needs an API key (see config options below).
+
+### 2) Restart OpenClaw
+
+Config changes require a gateway restart.
+
+```bash
+openclaw gateway restart
+```
+
+### 3) Verify
+
+```bash
+openclaw plugins list
+openclaw plugins doctor
+```
+
+Once loaded, the agent will have access to:
+- `memory_recall`
+- `memory_store`
+- `memory_forget`
+- `memory_stats`
+
+---
+
+## Clawdbot Setup (legacy)
 
 ## Quick Start
 
