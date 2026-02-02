@@ -13,8 +13,8 @@ import weaviate, {
 } from "weaviate-client";
 import OpenAI from "openai";
 import { randomUUID } from "node:crypto";
-import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
-import { stringEnum } from "clawdbot/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { stringEnum } from "openclaw/plugin-sdk";
 
 import {
   MEMORY_CATEGORIES,
@@ -519,7 +519,7 @@ const memoryPlugin = {
   kind: "memory" as const,
   configSchema: memoryConfigSchema,
 
-  register(api: ClawdbotPluginApi) {
+  register(api: OpenClawPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
     const store = new WeaviateMemoryStore(cfg);
 

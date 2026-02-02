@@ -1,0 +1,115 @@
+{
+  "id": "memory-weaviate",
+  "kind": "memory",
+  "uiHints": {
+    "weaviate.url": {
+      "label": "Weaviate URL",
+      "placeholder": "http://localhost:8080",
+      "help": "URL of your Weaviate instance"
+    },
+    "weaviate.grpcPort": {
+      "label": "Weaviate gRPC Port",
+      "placeholder": "50051",
+      "advanced": true,
+      "help": "gRPC port for Weaviate. Defaults to 50051 if REST is on 8080, otherwise REST port + 1."
+    },
+    "weaviate.apiKey": {
+      "label": "Weaviate API Key",
+      "sensitive": true,
+      "placeholder": "(optional for local instances)",
+      "help": "API key for Weaviate Cloud or authenticated instances"
+    },
+    "embedding.provider": {
+      "label": "Embedding Provider",
+      "help": "Use 'openai' for OpenAI API embeddings or 'weaviate' to use Weaviate's built-in vectorizer"
+    },
+    "embedding.apiKey": {
+      "label": "OpenAI API Key",
+      "sensitive": true,
+      "placeholder": "sk-proj-...",
+      "help": "API key for OpenAI embeddings (required if provider is 'openai')"
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "text-embedding-3-small",
+      "help": "OpenAI embedding model to use (ignored if provider is 'weaviate')"
+    },
+    "extraction.baseUrl": {
+      "label": "Extraction LLM Base URL",
+      "placeholder": "http://localhost:11434/v1",
+      "help": "OpenAI-compatible API base URL. Use http://localhost:11434/v1 for Ollama, http://localhost:1234/v1 for LM Studio. Leave empty for OpenAI API."
+    },
+    "extraction.apiKey": {
+      "label": "Extraction API Key",
+      "sensitive": true,
+      "placeholder": "(optional for local providers)",
+      "help": "API key for the extraction LLM. Not needed for Ollama/LM Studio. Falls back to embedding.apiKey if unset."
+    },
+    "extraction.model": {
+      "label": "Extraction Model",
+      "placeholder": "gpt-4o-mini",
+      "help": "Model for memory extraction (e.g. gpt-4o-mini, llama3.2, qwen2.5-coder, gemma2)"
+    },
+    "extraction.maxTokens": {
+      "label": "Extraction Max Tokens",
+      "placeholder": "1024",
+      "advanced": true,
+      "help": "Max tokens for extraction LLM response"
+    },
+    "collectionName": {
+      "label": "Collection Name",
+      "placeholder": "OpenClawMemory",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically capture important information from conversations"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories into context"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "weaviate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": { "type": "string" },
+          "apiKey": { "type": "string" },
+          "grpcPort": { "type": "number" }
+        },
+        "required": ["url"]
+      },
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "type": "string", "enum": ["openai", "weaviate"] },
+          "apiKey": { "type": "string" },
+          "model": {
+            "type": "string",
+            "enum": ["text-embedding-3-small", "text-embedding-3-large"]
+          }
+        }
+      },
+      "extraction": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": { "type": "string" },
+          "apiKey": { "type": "string" },
+          "model": { "type": "string" },
+          "maxTokens": { "type": "number" }
+        }
+      },
+      "collectionName": { "type": "string" },
+      "autoCapture": { "type": "boolean" },
+      "autoRecall": { "type": "boolean" }
+    },
+    "required": ["weaviate"]
+  }
+}
