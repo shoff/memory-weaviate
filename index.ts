@@ -13,8 +13,8 @@ import weaviate, {
 } from "weaviate-client";
 import OpenAI from "openai";
 import { randomUUID } from "node:crypto";
-import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
-import { stringEnum } from "clawdbot/plugin-sdk";
+import type { ClawdbotPluginApi } from "openclaw/plugin-sdk";
+import { stringEnum } from "openclaw/plugin-sdk";
 
 import {
   MEMORY_CATEGORIES,
@@ -351,10 +351,21 @@ class WeaviateMemoryStore {
 
   async count(): Promise<number> {
     await this.ensureInitialized();
-    const result = await this.collection!.aggregate.overAll({
-      returnMetrics: ["meta"],
-    });
-    return (result as any)?.meta?.count ?? 0;
+    // Use raw GraphQL for count — the JS client's aggregate.overAll generates broken
+    // GraphQL against Weaviate 1.28.x with newer client versions
+    try {
+      const url = `${this.config.weaviate.url}/v1/graphql`;
+      const query = `{Aggregate{${this.config.collectionName}{meta{count}}}}`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      const data = await resp.json() as any;
+      return data?.data?.Aggregate?.[this.config.collectionName]?.[0]?.meta?.count ?? 0;
+    } catch {
+      return -1;
+    }
   }
 
   async close(): Promise<void> {
