@@ -4,6 +4,7 @@
  * Long-term vector memory backed by Weaviate.
  * Supports OpenAI embeddings or Weaviate's built-in vectorizer.
  * Provides auto-recall (context injection) and auto-capture (conversation mining).
+ * Supports sensitivity filtering — sensitive memories are hidden in group/shared contexts.
  */
 
 import { Type } from "@sinclair/typebox";
@@ -35,6 +36,7 @@ type MemoryEntry = {
   importance: number;
   category: MemoryCategory;
   source: string; // "manual" | "auto-capture" | "agent"
+  sensitive: boolean;
   sessionKey?: string;
   createdAt: number;
 };
@@ -43,6 +45,23 @@ type MemorySearchResult = {
   entry: MemoryEntry;
   score: number;
 };
+
+// ============================================================================
+// Context helpers
+// ============================================================================
+
+/**
+ * Determine whether a session is a shared/group context based on the session key.
+ * OpenClaw encodes chat type in the session key: `:group:` or `:channel:` segments
+ * indicate a shared context where sensitive memories should be hidden.
+ *
+ * Session keys without these patterns (e.g. "main", "discord:dm:userId") are
+ * treated as private/direct contexts.
+ */
+function isGroupContext(sessionKey?: string): boolean {
+  if (!sessionKey) return false;
+  return sessionKey.includes(":group:") || sessionKey.includes(":channel:");
+}
 
 // ============================================================================
 // Weaviate Memory Store
@@ -55,6 +74,7 @@ class WeaviateMemoryStore {
 
   constructor(
     private readonly config: MemoryConfig,
+    private readonly logger?: { info: (...args: any[]) => void; warn: (...args: any[]) => void },
   ) {}
 
   private async ensureInitialized(): Promise<void> {
@@ -107,6 +127,9 @@ class WeaviateMemoryStore {
 
     if (!exists) {
       await this.createCollection();
+    } else {
+      // Migrate: ensure 'sensitive' property exists on existing collections
+      await this.ensureSensitiveProperty();
     }
 
     this.collection = this.client.collections.get(this.config.collectionName);
@@ -122,6 +145,7 @@ class WeaviateMemoryStore {
         { name: "importance", dataType: "number" },
         { name: "category", dataType: "text" },
         { name: "source", dataType: "text" },
+        { name: "sensitive", dataType: "boolean" },
         { name: "sessionKey", dataType: "text" },
         { name: "createdAt", dataType: "int" },
       ],
@@ -149,6 +173,39 @@ class WeaviateMemoryStore {
     await this.client!.collections.create(collectionConfig);
   }
 
+  /**
+   * Ensure the 'sensitive' boolean property exists on an existing collection.
+   * This is a no-op if the property already exists; Weaviate 1.x ignores duplicate
+   * property additions.
+   */
+  private async ensureSensitiveProperty(): Promise<void> {
+    try {
+      // Check if property exists via REST API
+      const url = `${this.config.weaviate.url}/v1/schema/${this.config.collectionName}`;
+      const resp = await fetch(url);
+      if (!resp.ok) return;
+      const schema = await resp.json() as any;
+      const props: any[] = schema?.properties ?? [];
+      const hasSensitive = props.some((p: any) => p.name === "sensitive");
+      if (hasSensitive) return;
+
+      // Add the property
+      const addUrl = `${this.config.weaviate.url}/v1/schema/${this.config.collectionName}/properties`;
+      const addResp = await fetch(addUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "sensitive", dataType: ["boolean"] }),
+      });
+      if (addResp.ok) {
+        this.logger?.info?.("memory-weaviate: added 'sensitive' property to existing collection");
+      } else {
+        this.logger?.warn?.(`memory-weaviate: failed to add 'sensitive' property: ${addResp.status}`);
+      }
+    } catch (err) {
+      this.logger?.warn?.(`memory-weaviate: migration check failed: ${String(err)}`);
+    }
+  }
+
   async store(
     entry: Omit<MemoryEntry, "id" | "createdAt">,
     vector?: number[],
@@ -163,6 +220,7 @@ class WeaviateMemoryStore {
       importance: entry.importance,
       category: entry.category,
       source: entry.source,
+      sensitive: entry.sensitive ?? false,
       sessionKey: entry.sessionKey ?? "",
       createdAt,
     };
@@ -188,8 +246,13 @@ class WeaviateMemoryStore {
     vector?: number[],
     limit = 5,
     minScore = 0.5,
+    filterSensitive = false,
   ): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
+
+    const filters = filterSensitive
+      ? this.collection!.filter.byProperty("sensitive").notEqual(true)
+      : undefined;
 
     let results: any;
 
@@ -204,9 +267,11 @@ class WeaviateMemoryStore {
           "importance",
           "category",
           "source",
+          "sensitive",
           "sessionKey",
           "createdAt",
         ],
+        ...(filters ? { filters } : {}),
       });
     } else {
       // Use Weaviate's built-in vectorizer with nearText
@@ -219,9 +284,11 @@ class WeaviateMemoryStore {
           "importance",
           "category",
           "source",
+          "sensitive",
           "sessionKey",
           "createdAt",
         ],
+        ...(filters ? { filters } : {}),
       });
     }
 
@@ -241,6 +308,7 @@ class WeaviateMemoryStore {
             importance: obj.properties.importance,
             category: obj.properties.category as MemoryCategory,
             source: obj.properties.source,
+            sensitive: obj.properties.sensitive ?? false,
             sessionKey: obj.properties.sessionKey,
             createdAt: obj.properties.createdAt,
           },
@@ -258,8 +326,13 @@ class WeaviateMemoryStore {
     queryText: string,
     limit = 5,
     minScore = 0.5,
+    filterSensitive = false,
   ): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
+
+    const filters = filterSensitive
+      ? this.collection!.filter.byProperty("sensitive").notEqual(true)
+      : undefined;
 
     const results = await this.collection!.query.nearText(queryText, {
       limit,
@@ -270,9 +343,11 @@ class WeaviateMemoryStore {
         "importance",
         "category",
         "source",
+        "sensitive",
         "sessionKey",
         "createdAt",
       ],
+      ...(filters ? { filters } : {}),
     });
 
     if (!results?.objects?.length) return [];
@@ -288,6 +363,7 @@ class WeaviateMemoryStore {
             importance: obj.properties.importance,
             category: obj.properties.category as MemoryCategory,
             source: obj.properties.source,
+            sensitive: obj.properties.sensitive ?? false,
             sessionKey: obj.properties.sessionKey,
             createdAt: obj.properties.createdAt,
           },
@@ -302,8 +378,13 @@ class WeaviateMemoryStore {
     limit = 5,
     minScore = 0.5,
     alpha = 0.75, // 1.0 = pure vector, 0.0 = pure keyword
+    filterSensitive = false,
   ): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
+
+    const filters = filterSensitive
+      ? this.collection!.filter.byProperty("sensitive").notEqual(true)
+      : undefined;
 
     const results = await this.collection!.query.hybrid(queryText, {
       limit,
@@ -315,9 +396,11 @@ class WeaviateMemoryStore {
         "importance",
         "category",
         "source",
+        "sensitive",
         "sessionKey",
         "createdAt",
       ],
+      ...(filters ? { filters } : {}),
     });
 
     if (!results?.objects?.length) return [];
@@ -330,6 +413,7 @@ class WeaviateMemoryStore {
           importance: obj.properties.importance,
           category: obj.properties.category as MemoryCategory,
           source: obj.properties.source,
+          sensitive: obj.properties.sensitive ?? false,
           sessionKey: obj.properties.sessionKey,
           createdAt: obj.properties.createdAt,
         },
@@ -366,6 +450,51 @@ class WeaviateMemoryStore {
     } catch {
       return -1;
     }
+  }
+
+  /**
+   * Fetch all objects with pagination (for migration).
+   * Returns objects in batches.
+   */
+  async fetchAll(batchSize = 100): Promise<any[]> {
+    await this.ensureInitialized();
+    const all: any[] = [];
+    let after: string | undefined;
+
+    while (true) {
+      const results = await this.collection!.query.fetchObjects({
+        limit: batchSize,
+        ...(after ? { after } : {}),
+        returnProperties: [
+          "text",
+          "importance",
+          "category",
+          "source",
+          "sensitive",
+          "sessionKey",
+          "createdAt",
+        ],
+      });
+
+      if (!results?.objects?.length) break;
+      all.push(...results.objects);
+
+      if (results.objects.length < batchSize) break;
+      after = results.objects[results.objects.length - 1].uuid;
+    }
+
+    return all;
+  }
+
+  /**
+   * Update a single object's properties by ID.
+   */
+  async updateProperties(id: string, properties: Record<string, any>): Promise<void> {
+    await this.ensureInitialized();
+    await this.collection!.data.update({
+      id,
+      properties: properties as any,
+    });
   }
 
   async close(): Promise<void> {
@@ -409,6 +538,7 @@ type ExtractedMemory = {
   text: string;
   category: MemoryCategory;
   importance: number;
+  sensitive: boolean;
 };
 
 const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction agent for a personal AI assistant. Your job is to identify information worth remembering long-term from conversation turns.
@@ -432,8 +562,28 @@ Respond with a JSON array of extracted memories. Each entry:
 {
   "text": "Concise, self-contained statement of the fact (should make sense without surrounding context)",
   "category": "preference" | "fact" | "decision" | "entity" | "conversation" | "other",
-  "importance": 0.0-1.0 (how important is this to remember?)
+  "importance": 0.0-1.0 (how important is this to remember?),
+  "sensitive": true | false
 }
+
+**Sensitivity guidelines** — mark sensitive: true if the memory involves:
+- Health or medical conditions, symptoms, medications, diagnoses
+- Political views, opinions, or affiliations
+- Family conflicts, relationship drama, personal grievances
+- Financial details (income, debt, specific amounts, investments)
+- Personal fears, vulnerabilities, insecurities, or trauma
+- Legal issues, criminal history, or sensitive legal matters
+- Sexual or intimate content
+- Addiction, substance use, or mental health struggles
+
+Mark sensitive: false for:
+- Technical discussions, project decisions, coding preferences
+- General preferences (food, music, hobbies, tools)
+- Work context, professional contacts, career facts
+- Schedules, deadlines, commitments
+- General knowledge or fun facts
+
+When in doubt, err on the side of marking as sensitive.
 
 If nothing is worth remembering, respond with an empty array: []
 
@@ -510,6 +660,9 @@ class MemoryExtractor {
           importance: typeof item.importance === "number"
             ? Math.max(0, Math.min(1, item.importance))
             : 0.7,
+          sensitive: typeof item.sensitive === "boolean"
+            ? item.sensitive
+            : false,
         }));
     } catch (err) {
       // Extraction failure is non-fatal - just skip this turn
@@ -526,13 +679,13 @@ const memoryPlugin = {
   id: "memory-weaviate",
   name: "Memory (Weaviate)",
   description:
-    "Weaviate-backed long-term vector memory with hybrid search, auto-recall, and auto-capture",
+    "Weaviate-backed long-term vector memory with hybrid search, auto-recall, auto-capture, and sensitivity filtering",
   kind: "memory" as const,
   configSchema: memoryConfigSchema,
 
   register(api: ClawdbotPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
-    const store = new WeaviateMemoryStore(cfg);
+    const store = new WeaviateMemoryStore(cfg, api.logger);
 
     // Optional OpenAI embeddings client (for provider = "openai")
     const embeddings =
@@ -549,7 +702,7 @@ const memoryPlugin = {
         : null;
 
     api.logger.info(
-      `memory-weaviate: registered (url: ${cfg.weaviate.url}, collection: ${cfg.collectionName}, embedding: ${cfg.embedding.provider}, extraction: ${extractor ? cfg.extraction.model : "disabled"}, lazy init)`,
+      `memory-weaviate: registered (url: ${cfg.weaviate.url}, collection: ${cfg.collectionName}, embedding: ${cfg.embedding.provider}, extraction: ${extractor ? cfg.extraction.model : "disabled"}, sensitivity: enabled, lazy init)`,
     );
 
     // Helper: get vector for text (only needed for OpenAI provider)
@@ -620,6 +773,7 @@ const memoryPlugin = {
             text: r.entry.text,
             category: r.entry.category,
             importance: r.entry.importance,
+            sensitive: r.entry.sensitive,
             source: r.entry.source,
             score: r.score,
             createdAt: r.entry.createdAt,
@@ -653,16 +807,24 @@ const memoryPlugin = {
             }),
           ),
           category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+          sensitive: Type.Optional(
+            Type.Boolean({
+              description:
+                "Mark as sensitive (hidden in group chats). Use for health, politics, family drama, financial details, personal vulnerabilities. Default: false.",
+            }),
+          ),
         }),
         async execute(_toolCallId, params) {
           const {
             text,
             importance = 0.7,
             category = "other",
+            sensitive = false,
           } = params as {
             text: string;
             importance?: number;
             category?: MemoryCategory;
+            sensitive?: boolean;
           };
 
           // Check for near-duplicates using vector similarity.
@@ -692,15 +854,15 @@ const memoryPlugin = {
           }
 
           const entry = await store.store(
-            { text, importance, category, source: "manual" },
+            { text, importance, category, source: "manual", sensitive },
             vector,
           );
 
           return {
             content: [
-              { type: "text", text: `Stored: "${text.slice(0, 100)}${text.length > 100 ? "..." : ""}"` },
+              { type: "text", text: `Stored${sensitive ? " (sensitive)" : ""}: "${text.slice(0, 100)}${text.length > 100 ? "..." : ""}"` },
             ],
-            details: { action: "created", id: entry.id },
+            details: { action: "created", id: entry.id, sensitive },
           };
         },
       },
@@ -810,7 +972,7 @@ const memoryPlugin = {
             content: [
               {
                 type: "text",
-                text: `Memory store: ${count} memories in collection "${cfg.collectionName}" on ${cfg.weaviate.url}`,
+                text: `Memory store: ${count} memories in collection "${cfg.collectionName}" on ${cfg.weaviate.url} (sensitivity filtering: enabled)`,
               },
             ],
             details: { count, collection: cfg.collectionName },
@@ -838,6 +1000,7 @@ const memoryPlugin = {
             console.log(`Collection: ${cfg.collectionName}`);
             console.log(`Weaviate: ${cfg.weaviate.url}`);
             console.log(`Total memories: ${count}`);
+            console.log(`Sensitivity filtering: enabled`);
           });
 
         mem
@@ -850,15 +1013,17 @@ const memoryPlugin = {
             "Search mode: hybrid|vector|keyword",
             "hybrid",
           )
+          .option("--safe", "Only show non-sensitive memories")
           .action(async (query: string, opts: any) => {
             const limit = parseInt(opts.limit);
+            const filterSensitive = !!opts.safe;
             let results: MemorySearchResult[];
 
             if (opts.mode === "hybrid") {
-              results = await store.hybridSearch(query, limit, 0.1);
+              results = await store.hybridSearch(query, limit, 0.1, 0.75, filterSensitive);
             } else {
               const vector = await getVector(query);
-              results = await store.search(query, vector, limit, 0.1);
+              results = await store.search(query, vector, limit, 0.1, filterSensitive);
             }
 
             const output = results.map((r) => ({
@@ -866,6 +1031,7 @@ const memoryPlugin = {
               text: r.entry.text,
               category: r.entry.category,
               importance: r.entry.importance,
+              sensitive: r.entry.sensitive,
               source: r.entry.source,
               score: r.score,
             }));
@@ -878,6 +1044,7 @@ const memoryPlugin = {
           .argument("<text>", "Text to store")
           .option("--category <cat>", "Category", "other")
           .option("--importance <n>", "Importance 0-1", "0.7")
+          .option("--sensitive", "Mark as sensitive")
           .action(async (text: string, opts: any) => {
             const vector = await getVector(text);
             const entry = await store.store(
@@ -886,10 +1053,11 @@ const memoryPlugin = {
                 importance: parseFloat(opts.importance),
                 category: opts.category as MemoryCategory,
                 source: "manual",
+                sensitive: !!opts.sensitive,
               },
               vector,
             );
-            console.log(`Stored: ${entry.id}`);
+            console.log(`Stored: ${entry.id}${opts.sensitive ? " (sensitive)" : ""}`);
           });
 
         mem
@@ -900,6 +1068,60 @@ const memoryPlugin = {
             await store.delete(id);
             console.log(`Deleted: ${id}`);
           });
+
+        mem
+          .command("migrate-sensitive")
+          .description("Backfill the sensitive field on all existing memories. Defaults to false; optionally scans content for sensitive keywords.")
+          .option("--scan", "Scan content for sensitive keywords and flag likely-sensitive ones")
+          .action(async (opts: any) => {
+            console.log("Fetching all memories...");
+            const objects = await store.fetchAll();
+            console.log(`Found ${objects.length} memories to check.`);
+
+            let updated = 0;
+            let flagged = 0;
+
+            // Keyword-based sensitivity heuristic
+            const sensitivePatterns = [
+              /\b(diagnos|symptom|medicat|prescri|illness|disease|surgery|therapy|therapist|psychiatr|psycholog|mental\s*health|depress|anxiety|adhd|ptsd|ocd|bipolar)\b/i,
+              /\b(politic|democrat|republican|liberal|conservative|vote|election|trump|biden|party\s+affili)\b/i,
+              /\b(divorce|custody|family\s+fight|family\s+drama|estrang|abuse|domestic|affair|cheating)\b/i,
+              /\b(salary|income|debt|bankrupt|mortgage|loan|credit\s+score|net\s+worth|invest|portfolio|tax\s+return)\b/i,
+              /\b(fear|vulnerab|insecur|trauma|suicid|self.harm|addiction|rehab|substance|alcohol|drug\s+use)\b/i,
+              /\b(arrest|lawsuit|legal\s+trouble|criminal|probation|court\s+order)\b/i,
+            ];
+
+            for (const obj of objects) {
+              const currentSensitive = obj.properties?.sensitive;
+
+              // If sensitive is already set (true or false), skip unless scanning
+              if (currentSensitive !== undefined && currentSensitive !== null && !opts.scan) {
+                continue;
+              }
+
+              let sensitive = false;
+
+              if (opts.scan && obj.properties?.text) {
+                sensitive = sensitivePatterns.some((pattern) =>
+                  pattern.test(obj.properties.text),
+                );
+                if (sensitive) flagged++;
+              }
+
+              try {
+                await store.updateProperties(obj.uuid, { sensitive });
+                updated++;
+              } catch (err) {
+                console.error(`Failed to update ${obj.uuid}: ${err}`);
+              }
+            }
+
+            console.log(`Updated ${updated} memories.`);
+            if (opts.scan) {
+              console.log(`Flagged ${flagged} as sensitive based on keyword scan.`);
+            }
+            console.log("Migration complete.");
+          });
       },
       { commands: ["wmem"] },
     );
@@ -909,16 +1131,20 @@ const memoryPlugin = {
     // ========================================================================
 
     if (cfg.autoRecall) {
-      api.on("before_agent_start", async (event) => {
+      api.on("before_agent_start", async (event, ctx) => {
         if (!event.prompt || event.prompt.length < 5) return;
 
         try {
+          // Determine if this is a group/shared context
+          const filterSensitive = isGroupContext(ctx?.sessionKey);
+
           // Use hybrid search for best recall
           const results = await store.hybridSearch(
             event.prompt,
             3,
             0.3,
             0.75,
+            filterSensitive,
           );
 
           if (results.length === 0) return;
@@ -931,7 +1157,7 @@ const memoryPlugin = {
             .join("\n");
 
           api.logger.info?.(
-            `memory-weaviate: injecting ${results.length} memories into context`,
+            `memory-weaviate: injecting ${results.length} memories into context (sensitive filtered: ${filterSensitive})`,
           );
 
           return {
@@ -992,7 +1218,7 @@ const memoryPlugin = {
           // Truncate to avoid blowing up the extraction call
           const conversationText = parts.join("\n\n").slice(0, 4000);
 
-          // LLM extracts what's worth remembering
+          // LLM extracts what's worth remembering (including sensitivity classification)
           const extracted = await extractor.extract(conversationText);
           if (extracted.length === 0) return;
 
@@ -1012,6 +1238,7 @@ const memoryPlugin = {
                 importance: memory.importance,
                 category: memory.category,
                 source: "auto-capture",
+                sensitive: memory.sensitive,
               },
               vector,
             );
@@ -1039,7 +1266,7 @@ const memoryPlugin = {
       id: "memory-weaviate",
       start: () => {
         api.logger.info(
-          `memory-weaviate: started (${cfg.weaviate.url}, collection: ${cfg.collectionName})`,
+          `memory-weaviate: started (${cfg.weaviate.url}, collection: ${cfg.collectionName}, sensitivity: enabled)`,
         );
       },
       stop: async () => {

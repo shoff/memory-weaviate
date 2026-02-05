@@ -163,10 +163,20 @@ Once configured, these tools are available to the agent:
 
 | Tool | Description |
 |------|-------------|
-| `memory_store` | Save information to long-term memory |
+| `memory_store` | Save information to long-term memory (supports `sensitive` flag) |
 | `memory_recall` | Search memories (hybrid: vector + keyword) |
 | `memory_forget` | Delete memories by ID or search |
 | `memory_stats` | Show memory database statistics |
+
+## Sensitivity Filtering
+
+The plugin supports **sensitivity-aware recall**:
+
+- **`sensitive: true`** memories are hidden in group/shared contexts (session keys containing `:group:` or `:channel:`)
+- **`sensitive: false`** memories are shown everywhere
+- Auto-capture uses LLM to detect sensitive content (health, politics, family drama, finances, vulnerabilities)
+- Use `memory_store` with `sensitive: true` to manually flag sensitive memories
+- Migration: run `openclaw wmem migrate-sensitive --scan` to backfill existing memories
 
 ---
 
